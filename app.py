@@ -19,7 +19,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 # CONFIGURAÇÃO DA PÁGINA
 # =============================================================================
 st.set_page_config(
-    page_title="Prospect Hunter 3.5",
+    page_title="Prospect Hunter 3.6",
     page_icon="🎯",
     layout="wide"
 )
@@ -98,7 +98,6 @@ def run_scraper(localizacao, nichos_selecionados, max_results=10):
                 time.sleep(3) 
             except: continue
 
-            # Scroll
             try:
                 painel = driver.find_element(By.CSS_SELECTOR, "div[role='feed']")
                 for _ in range(2): 
@@ -161,8 +160,8 @@ def run_scraper(localizacao, nichos_selecionados, max_results=10):
                         "Nicho": nicho,
                         "Telefone": telefone,
                         "Endereço": endereco,
-                        "Avaliação": nota,
-                        "Status/Horário": horario,
+                        "Avaliação": nota,           # Mantido para ficha técnica
+                        "Status/Horário": horario,   # Mantido para ficha técnica
                         "WhatsApp Link": link_wpp if link_wpp else "",
                         "Maps Link": url_maps
                     }
@@ -185,7 +184,7 @@ def run_scraper(localizacao, nichos_selecionados, max_results=10):
 # INTERFACE (FRONTEND)
 # =============================================================================
 
-st.title("🎯 Prospect Hunter 3.5")
+st.title("🎯 Prospect Hunter 3.6")
 st.markdown("### Ficha Técnica e Contato Rápido")
 
 # Sidebar
@@ -228,59 +227,62 @@ if btn_buscar:
 
 # Visualização e Exportação
 if not st.session_state.df_resultados.empty:
-    df = st.session_state.df_resultados
+    # DataFrame completo (Memória)
+    df_full = st.session_state.df_resultados
+    
+    # DataFrame para Exibição e Exportação (Remove colunas extras)
+    colunas_ocultas = ["Avaliação", "Status/Horário"]
+    df_clean = df_full.drop(columns=colunas_ocultas, errors='ignore')
     
     st.divider()
     
-    # Tabela na Tela
+    # Tabela na Tela (Versão Limpa)
     st.subheader("📋 Lista de Leads")
     st.data_editor(
-        df,
+        df_clean,
         column_config={
             "WhatsApp Link": st.column_config.LinkColumn("WhatsApp", display_text="💬 Conversar"),
             "Maps Link": st.column_config.LinkColumn("Google Maps", display_text="🗺️ Ver"),
-            "Avaliação": st.column_config.TextColumn("Feedback", help="Nota e Qtd Avaliações"),
         },
         use_container_width=True,
         hide_index=True
     )
     
-    # === GERAÇÃO DO EXCEL AVANÇADO (Links amigáveis) ===
+    # === GERAÇÃO DO EXCEL LIMPO (Links amigáveis) ===
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        # Escreve os dados iniciais
-        df.to_excel(writer, index=False, sheet_name='Leads')
+        # Escreve os dados LIMPOS
+        df_clean.to_excel(writer, index=False, sheet_name='Leads')
         
-        # Pega objetos do workbook/worksheet para editar
         workbook = writer.book
         worksheet = writer.sheets['Leads']
-        
-        # Formato do Link (Azul e Sublinhado)
         link_format = workbook.add_format({'font_color': 'blue', 'underline': 1})
         
-        # Encontra os índices das colunas de Link
-        col_wa = df.columns.get_loc("WhatsApp Link")
-        col_maps = df.columns.get_loc("Maps Link")
-        
-        # Itera sobre as linhas para transformar URL em Texto clicável
-        for i, row in df.iterrows():
-            row_num = i + 1 # +1 porque a linha 0 é o cabeçalho
+        # Encontra índices no DF Limpo
+        try:
+            col_wa = df_clean.columns.get_loc("WhatsApp Link")
+            col_maps = df_clean.columns.get_loc("Maps Link")
             
-            # Link WhatsApp -> "Conversar"
-            url_wa = row['WhatsApp Link']
-            if pd.notna(url_wa) and url_wa != "":
-                worksheet.write_url(row_num, col_wa, url_wa, link_format, string='Conversar')
+            for i, row in df_clean.iterrows():
+                row_num = i + 1 
                 
-            # Link Maps -> "Ver"
-            url_maps = row['Maps Link']
-            if pd.notna(url_maps) and url_maps != "":
-                worksheet.write_url(row_num, col_maps, url_maps, link_format, string='Ver')
+                # Mascarar Link WhatsApp
+                url_wa = row['WhatsApp Link']
+                if pd.notna(url_wa) and url_wa != "":
+                    worksheet.write_url(row_num, col_wa, url_wa, link_format, string='Conversar')
+                    
+                # Mascarar Link Maps
+                url_maps = row['Maps Link']
+                if pd.notna(url_maps) and url_maps != "":
+                    worksheet.write_url(row_num, col_maps, url_maps, link_format, string='Ver')
+        except:
+            pass # Previne erro se coluna não existir
 
     # Botão Download
     col_dl, col_cl = st.columns([4, 1])
     with col_dl:
         st.download_button(
-            label="📥 Baixar Planilha Excel",
+            label="📥 Baixar Planilha Excel (Limpa)",
             data=output.getvalue(),
             file_name=f"leads_{int(time.time())}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -291,15 +293,16 @@ if not st.session_state.df_resultados.empty:
             st.session_state.df_resultados = pd.DataFrame()
             st.rerun()
 
-    # --- FICHA TÉCNICA DETALHADA ---
+    # --- FICHA TÉCNICA DETALHADA (Usa dados completos) ---
     st.divider()
     st.subheader("📝 Ficha Técnica Detalhada")
     
-    empresas = df["Empresa"].tolist()
-    selecao = st.selectbox("Selecione para ver detalhes:", empresas)
+    empresas = df_full["Empresa"].tolist()
+    selecao = st.selectbox("Selecione para ver detalhes completos:", empresas)
     
     if selecao:
-        dados = df[df["Empresa"] == selecao].iloc[0]
+        # Busca no DF Completo
+        dados = df_full[df_full["Empresa"] == selecao].iloc[0]
         
         with st.container():
             c1, c2 = st.columns([3, 1])
@@ -307,6 +310,7 @@ if not st.session_state.df_resultados.empty:
                 st.markdown(f"## {dados['Empresa']}")
                 st.markdown(f"**Nicho:** {dados['Nicho']}")
             with c2:
+                # Mostra Avaliação aqui, embora não esteja na tabela/excel
                 st.metric(label="Avaliação", value=dados['Avaliação'].split(" ")[0] if dados['Avaliação'][0].isdigit() else "-", delta=dados['Avaliação'])
 
             st.markdown("---")
@@ -314,6 +318,7 @@ if not st.session_state.df_resultados.empty:
             col_info, col_actions = st.columns([2, 1])
             with col_info:
                 st.markdown(f"📍 **Endereço:** \n{dados['Endereço']}")
+                # Mostra Status aqui
                 st.markdown(f"🕒 **Status:** \n{dados['Status/Horário']}")
                 st.markdown(f"📞 **Telefone:** {dados['Telefone']}")
             
