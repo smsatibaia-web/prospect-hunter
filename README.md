@@ -2,9 +2,7 @@
 
 Ferramenta de automação para geração de leads (prospecção) baseada em localização. O sistema varre o Google Maps em busca de empresas de nichos específicos, extrai contatos e gera planilhas enriquecidas com links diretos para WhatsApp e Geolocalização.
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://prospect-hunter-l7juemqf5jwzubevkoeh99.streamlit.app/)
-
-> **🔗 Acesse o sistema online:** [Prospect Hunter 2.0 · Streamlit](COLE_O_LINK_DO_SEU_APP_AQUI)
+> **🔗 Acesse o sistema online:** [Prospect Hunter 2.0 · Streamlit](https://prospect-hunter-l7juemqf5jwzubevkoeh99.streamlit.app/)
 
 ![Status](https://img.shields.io/badge/Status-Functional-brightgreen)
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
