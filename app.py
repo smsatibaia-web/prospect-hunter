@@ -19,7 +19,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 # CONFIGURAÇÃO DA PÁGINA
 # =============================================================================
 st.set_page_config(
-    page_title="Prospect Hunter 3.0",
+    page_title="Prospect Hunter 3.5",
     page_icon="🎯",
     layout="wide"
 )
@@ -73,7 +73,7 @@ def get_driver():
     return webdriver.Chrome(service=service, options=options)
 
 # =============================================================================
-# MOTOR DE BUSCA (SCRAPER ATUALIZADO)
+# MOTOR DE BUSCA (SCRAPER)
 # =============================================================================
 def run_scraper(localizacao, nichos_selecionados, max_results=10):
     driver = get_driver()
@@ -98,7 +98,7 @@ def run_scraper(localizacao, nichos_selecionados, max_results=10):
                 time.sleep(3) 
             except: continue
 
-            # Scroll para carregar
+            # Scroll
             try:
                 painel = driver.find_element(By.CSS_SELECTOR, "div[role='feed']")
                 for _ in range(2): 
@@ -111,7 +111,6 @@ def run_scraper(localizacao, nichos_selecionados, max_results=10):
             
             for i in range(limit):
                 try:
-                    # Re-captura elementos para evitar erro
                     itens = driver.find_elements(By.CLASS_NAME, "hfpxzc")
                     if i >= len(itens): break
                     item = itens[i]
@@ -119,60 +118,42 @@ def run_scraper(localizacao, nichos_selecionados, max_results=10):
                     nome = item.get_attribute("aria-label")
                     if not nome: continue
 
-                    # Clica no item para abrir detalhes
                     driver.execute_script("arguments[0].click();", item)
                     time.sleep(2)
                     
-                    # === EXTRAÇÃO DE DETALHES ===
+                    # === EXTRAÇÃO ===
                     url_maps = driver.current_url
                     telefone = "Não encontrado"
                     endereco = "Não informado"
                     nota = "Sem avaliações"
-                    categoria = nicho
                     horario = "Não informado"
 
-                    # 1. Telefone e Endereço (via botões laterais)
                     btns = driver.find_elements(By.TAG_NAME, "button")
                     for btn in btns:
                         aria = btn.get_attribute("aria-label")
                         if not aria: continue
-                        
                         if "Telefone" in aria or "Phone" in aria:
                             telefone = aria.replace("Telefone: ", "").replace("Phone: ", "").strip()
-                        
                         if "Endereço" in aria or "Address" in aria:
                             endereco = aria.replace("Endereço: ", "").replace("Address: ", "").strip()
 
-                    # 2. Nota e Categoria (via texto no painel)
                     try:
-                        # Tenta pegar a div que contém as estrelas (geralmente tem role="img")
                         estrelas = driver.find_element(By.CSS_SELECTOR, "span[role='img']")
                         lbl = estrelas.get_attribute("aria-label")
                         if lbl and ("estrelas" in lbl or "stars" in lbl):
-                            nota = lbl # Ex: "4,8 estrelas 150 avaliações"
+                            nota = lbl
                     except: pass
                     
                     try:
-                        # Tenta pegar a categoria específica (geralmente texto cinza abaixo do nome)
-                        # No maps, a categoria costuma ser um botão com classe específica, mas varia.
-                        # Vamos tentar uma abordagem genérica por hierarquia se necessário.
-                        pass 
-                    except: pass
-
-                    # 3. Horário (Status simples)
-                    try:
-                        # Procura aria-labels que indiquem status
                         labels_status = ["Aberto", "Fechado", "Open", "Closed"]
                         divs = driver.find_elements(By.TAG_NAME, "div")
                         for div in divs:
                             aria_div = div.get_attribute("aria-label")
                             if aria_div and any(s in aria_div for s in labels_status):
-                                # Geralmente é algo como "Aberto ⋅ Fecha às 18:00"
                                 horario = aria_div
                                 break
                     except: pass
 
-                    # Processamento final
                     tel_limpo, link_wpp = limpar_telefone_gerar_link(telefone)
                     
                     dados = {
@@ -204,7 +185,7 @@ def run_scraper(localizacao, nichos_selecionados, max_results=10):
 # INTERFACE (FRONTEND)
 # =============================================================================
 
-st.title("🎯 Prospect Hunter 3.0")
+st.title("🎯 Prospect Hunter 3.5")
 st.markdown("### Ficha Técnica e Contato Rápido")
 
 # Sidebar
@@ -245,13 +226,13 @@ if btn_buscar:
             else:
                 st.warning("Nenhum resultado.")
 
-# Visualização
+# Visualização e Exportação
 if not st.session_state.df_resultados.empty:
     df = st.session_state.df_resultados
     
     st.divider()
     
-    # Tabela Principal
+    # Tabela na Tela
     st.subheader("📋 Lista de Leads")
     st.data_editor(
         df,
@@ -264,20 +245,55 @@ if not st.session_state.df_resultados.empty:
         hide_index=True
     )
     
-    # Download
+    # === GERAÇÃO DO EXCEL AVANÇADO (Links amigáveis) ===
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        # Escreve os dados iniciais
         df.to_excel(writer, index=False, sheet_name='Leads')
-    
+        
+        # Pega objetos do workbook/worksheet para editar
+        workbook = writer.book
+        worksheet = writer.sheets['Leads']
+        
+        # Formato do Link (Azul e Sublinhado)
+        link_format = workbook.add_format({'font_color': 'blue', 'underline': 1})
+        
+        # Encontra os índices das colunas de Link
+        col_wa = df.columns.get_loc("WhatsApp Link")
+        col_maps = df.columns.get_loc("Maps Link")
+        
+        # Itera sobre as linhas para transformar URL em Texto clicável
+        for i, row in df.iterrows():
+            row_num = i + 1 # +1 porque a linha 0 é o cabeçalho
+            
+            # Link WhatsApp -> "Conversar"
+            url_wa = row['WhatsApp Link']
+            if pd.notna(url_wa) and url_wa != "":
+                worksheet.write_url(row_num, col_wa, url_wa, link_format, string='Conversar')
+                
+            # Link Maps -> "Ver"
+            url_maps = row['Maps Link']
+            if pd.notna(url_maps) and url_maps != "":
+                worksheet.write_url(row_num, col_maps, url_maps, link_format, string='Ver')
+
+    # Botão Download
     col_dl, col_cl = st.columns([4, 1])
     with col_dl:
-        st.download_button("📥 Baixar Planilha Excel", output.getvalue(), f"leads_{int(time.time())}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        st.download_button(
+            label="📥 Baixar Planilha Excel",
+            data=output.getvalue(),
+            file_name=f"leads_{int(time.time())}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
     with col_cl:
-        if st.button("Limpar"): st.session_state.df_resultados = pd.DataFrame(); st.rerun()
+        if st.button("Limpar"):
+            st.session_state.df_resultados = pd.DataFrame()
+            st.rerun()
 
     # --- FICHA TÉCNICA DETALHADA ---
     st.divider()
-    st.subheader("📝 Ficha Técnica da Empresa")
+    st.subheader("📝 Ficha Técnica Detalhada")
     
     empresas = df["Empresa"].tolist()
     selecao = st.selectbox("Selecione para ver detalhes:", empresas)
@@ -285,9 +301,7 @@ if not st.session_state.df_resultados.empty:
     if selecao:
         dados = df[df["Empresa"] == selecao].iloc[0]
         
-        # Container Visual estilo "Card"
         with st.container():
-            # Cabeçalho com Nome e Avaliação
             c1, c2 = st.columns([3, 1])
             with c1:
                 st.markdown(f"## {dados['Empresa']}")
@@ -297,23 +311,21 @@ if not st.session_state.df_resultados.empty:
 
             st.markdown("---")
             
-            # Informações Técnicas
             col_info, col_actions = st.columns([2, 1])
-            
             with col_info:
                 st.markdown(f"📍 **Endereço:** \n{dados['Endereço']}")
-                st.markdown(f"🕒 **Horário/Status:** \n{dados['Status/Horário']}")
+                st.markdown(f"🕒 **Status:** \n{dados['Status/Horário']}")
                 st.markdown(f"📞 **Telefone:** {dados['Telefone']}")
             
             with col_actions:
-                st.markdown("### Ações Rápidas")
+                st.markdown("### Ações")
                 if dados["WhatsApp Link"]:
-                    st.link_button("💬 Chamar no WhatsApp", dados["WhatsApp Link"], type="primary", use_container_width=True)
+                    st.link_button("💬 Conversar (Whats)", dados["WhatsApp Link"], type="primary", use_container_width=True)
                 else:
                     st.button("🚫 Sem WhatsApp", disabled=True, use_container_width=True)
                 
                 if dados["Maps Link"]:
-                    st.link_button("🗺️ Ver no Google Maps", dados["Maps Link"], use_container_width=True)
+                    st.link_button("🗺️ Ver no Maps", dados["Maps Link"], use_container_width=True)
 
 else:
     if not btn_buscar:
