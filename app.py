@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import time
 import os
-import requests
 import re
 from io import BytesIO
 
@@ -20,8 +19,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 # CONFIGURAÇÃO DA PÁGINA
 # =============================================================================
 st.set_page_config(
-    page_title="Prospect Hunter Web",
-    page_icon="🕵️",
+    page_title="Prospect Hunter 2.0",
+    page_icon="🎯",
     layout="wide"
 )
 
@@ -39,34 +38,65 @@ PADRAO_NICHOS = [
 ]
 
 # =============================================================================
-# FUNÇÕES DE CONFIGURAÇÃO DO DRIVER (CORREÇÃO DO ERRO)
+# FUNÇÕES ÚTEIS (Limpeza e Links)
+# =============================================================================
+def limpar_telefone_gerar_link(telefone):
+    """
+    Remove caracteres não numéricos e formata para link do WhatsApp.
+    Assume Brasil (55) se o número não tiver código de país.
+    """
+    if not telefone or telefone == "Não encontrado":
+        return None, None
+    
+    # Remove tudo que não é dígito
+    nums = re.sub(r'\D', '', telefone)
+    
+    if not nums:
+        return None, None
+        
+    # Lógica simples para garantir o 55 (Brasil)
+    # Se tiver 10 ou 11 dígitos, é DDD + Número (ex: 11999999999), adiciona 55
+    if 10 <= len(nums) <= 11:
+        nums = "55" + nums
+    
+    link = f"https://web.whatsapp.com/send?phone={nums}"
+    return nums, link
+
+def extrair_lat_long(url_maps):
+    """
+    Tenta extrair latitude e longitude da URL do Google Maps para plotar no mapa.
+    Padrão comum: @-23.12345,-46.12345
+    """
+    if not url_maps: return None, None
+    try:
+        match = re.search(r'@([-.\d]+),([-.\d]+)', url_maps)
+        if match:
+            return float(match.group(1)), float(match.group(2))
+    except:
+        pass
+    return None, None
+
+# =============================================================================
+# CONFIGURAÇÃO DO DRIVER
 # =============================================================================
 def get_driver():
-    """
-    Configura o driver do Chrome.
-    Detecta automaticamente se está no Streamlit Cloud (Linux) ou Local (Windows/Mac).
-    """
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless")  # Roda sem interface gráfica (obrigatório na nuvem)
+    options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
     
-    # Caminhos padrão do Chromium no ambiente Linux do Streamlit Cloud
     chromium_path = "/usr/bin/chromium"
     chromedriver_path = "/usr/bin/chromedriver"
     
-    # Verifica se estamos no ambiente Cloud (Linux com pacotes instalados)
     if os.path.exists(chromium_path) and os.path.exists(chromedriver_path):
         options.binary_location = chromium_path
         service = Service(chromedriver_path)
     else:
-        # Ambiente Local: Usa o gerenciador para baixar a versão correta
         try:
             service = Service(ChromeDriverManager().install())
         except Exception as e:
-            # Fallback genérico se o manager falhar
             st.error(f"Erro ao configurar driver local: {e}")
             return None
         
@@ -74,28 +104,11 @@ def get_driver():
     return driver
 
 # =============================================================================
-# FUNÇÕES DE EXTRAÇÃO
+# MOTOR DE BUSCA (SCRAPER)
 # =============================================================================
-def extrair_email_do_site(url):
-    """Tenta extrair email visitando o site (simplificado)"""
-    if not url or "google" in url: return ""
-    if not url.startswith("http"): url = "http://" + url
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        response = requests.get(url, timeout=5, headers=headers)
-        if response.status_code == 200:
-            emails = set(re.findall(r"[a-z0-9\.\-+_]+@[a-z0-9\.\-+_]+\.[a-z]+", response.text, re.I))
-            validos = [e for e in emails if not e.endswith(('.png', '.jpg', '.js', '.css', '.svg'))]
-            if validos: return validos[0]
-    except:
-        pass
-    return ""
-
 def run_scraper(localizacao, nichos_selecionados, max_results=10):
-    """Função principal de varredura"""
     driver = get_driver()
-    if not driver:
-        return pd.DataFrame()
+    if not driver: return pd.DataFrame()
 
     wait = WebDriverWait(driver, 10)
     resultados = []
@@ -111,33 +124,26 @@ def run_scraper(localizacao, nichos_selecionados, max_results=10):
             
             try:
                 driver.get("https://www.google.com/maps?hl=pt-BR")
-                
-                # Aguarda e interage com a caixa de busca
                 input_box = wait.until(EC.presence_of_element_located((By.ID, "searchboxinput")))
                 input_box.clear()
                 input_box.send_keys(termo)
                 input_box.send_keys(Keys.ENTER)
                 time.sleep(3) 
             except Exception as e:
-                st.warning(f"Erro ao iniciar busca para {nicho}: {e}")
                 continue
 
-            # Tenta rolar a lista de resultados
             try:
                 painel = driver.find_element(By.CSS_SELECTOR, "div[role='feed']")
                 for _ in range(2): 
                     driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", painel)
                     time.sleep(1.5)
-            except:
-                pass # Às vezes o painel não carrega ou tem poucos resultados
+            except: pass
 
-            # Coleta os links dos locais
             links = driver.find_elements(By.CLASS_NAME, "hfpxzc")
             limit = min(len(links), max_results)
             
             for i in range(limit):
                 try:
-                    # Re-busca elementos para evitar StaleElement
                     itens = driver.find_elements(By.CLASS_NAME, "hfpxzc")
                     if i >= len(itens): break
                     item = itens[i]
@@ -145,20 +151,21 @@ def run_scraper(localizacao, nichos_selecionados, max_results=10):
                     nome = item.get_attribute("aria-label")
                     if not nome: continue
 
-                    # Clica para ver detalhes
+                    # Clica e aguarda atualização da URL
                     try:
                         item.click()
-                        time.sleep(1.5)
+                        time.sleep(2) 
                     except:
                         driver.execute_script("arguments[0].click();", item)
-                        time.sleep(1.5)
+                        time.sleep(2)
+                    
+                    # Captura URL atual (Link do Maps)
+                    url_maps = driver.current_url
                     
                     telefone = "Não encontrado"
                     site = ""
                     
-                    # Extração Lateral
                     try:
-                        # Procura botões com aria-labels específicos
                         btns = driver.find_elements(By.TAG_NAME, "button")
                         for btn in btns:
                             aria = btn.get_attribute("aria-label")
@@ -169,40 +176,40 @@ def run_scraper(localizacao, nichos_selecionados, max_results=10):
                                     site_temp = btn.get_attribute("aria-label").replace("Website: ", "").strip()
                                     if "." in site_temp: site = site_temp
                         
-                        # Fallback para site
                         if not site:
                             try:
                                 web_elem = driver.find_element(By.CSS_SELECTOR, "[data-item-id='authority']")
                                 site = web_elem.get_attribute("href")
                             except: pass
-                            
                     except: pass
                     
-                    email = ""
-                    if site:
-                        email = extrair_email_do_site(site)
+                    # Processa Telefone para WhatsApp
+                    tel_limpo, link_wpp = limpar_telefone_gerar_link(telefone)
+                    
+                    # Extrai Lat/Long para o mapa visual
+                    lat, lon = extrair_lat_long(url_maps)
 
                     dados = {
                         "Empresa": nome,
                         "Nicho": nicho,
-                        "Local": localizacao,
                         "Telefone": telefone,
+                        "WhatsApp Link": link_wpp if link_wpp else "",
+                        "Maps Link": url_maps,
                         "Site": site,
-                        "Email": email
+                        "latitude": lat, # Usado internamente para o mapa
+                        "longitude": lon # Usado internamente para o mapa
                     }
                     resultados.append(dados)
                     
                 except Exception as e:
-                    # Erro em um item não deve parar o loop
                     continue
             
             progress_bar.progress((idx + 1) / total_steps)
             
     except Exception as e:
-        st.error(f"Erro fatal durante a execução: {e}")
+        st.error(f"Erro fatal: {e}")
     finally:
-        if driver:
-            driver.quit()
+        if driver: driver.quit()
         status_text.empty()
         progress_bar.empty()
         
@@ -212,91 +219,135 @@ def run_scraper(localizacao, nichos_selecionados, max_results=10):
 # INTERFACE (FRONTEND)
 # =============================================================================
 
-st.title("🕵️ Prospect Hunter - Web Edition")
-st.markdown("Busca de leads locais via Google Maps (Versão Cloud).")
+st.title("🎯 Prospect Hunter 2.0")
+st.markdown("Busca de Leads com Links Diretos para WhatsApp e Maps.")
 
-# Sidebar de Controles
+# Sidebar
 with st.sidebar:
     st.header("Configuração")
     local_input = st.text_input("📍 Localização", placeholder="Ex: Centro, Atibaia - SP")
     
-    st.subheader("Nichos")
-    todos = st.checkbox("Selecionar Todos")
-    
+    todos = st.checkbox("Selecionar Todos Nichos")
     if todos:
-        nichos_selecionados = st.multiselect("Selecione os Nichos", PADRAO_NICHOS, default=PADRAO_NICHOS)
+        nichos_selecionados = st.multiselect("Nichos", PADRAO_NICHOS, default=PADRAO_NICHOS)
     else:
-        nichos_selecionados = st.multiselect("Selecione os Nichos", PADRAO_NICHOS, default=["Advocacia"])
+        nichos_selecionados = st.multiselect("Nichos", PADRAO_NICHOS, default=["Advocacia"])
         
-    novo_nicho = st.text_input("Adicionar Nicho Customizado")
-    if st.button("Adicionar"):
+    novo_nicho = st.text_input("Novo Nicho")
+    if st.button("Add Nicho"):
         if novo_nicho and novo_nicho not in PADRAO_NICHOS:
             PADRAO_NICHOS.append(novo_nicho)
-            st.success(f"{novo_nicho} adicionado!")
             st.rerun()
 
-    max_res = st.slider("Max resultados por nicho", 5, 50, 10)
-    
+    max_res = st.slider("Max resultados", 5, 50, 10)
     st.divider()
     btn_buscar = st.button("🚀 Iniciar Varredura", type="primary")
 
-# Área Principal - Lógica de Estado
+# Estado
 if "df_resultados" not in st.session_state:
     st.session_state.df_resultados = pd.DataFrame()
 
+# Lógica de Busca
 if btn_buscar:
-    if not local_input:
-        st.warning("Por favor, digite uma localização.")
-    elif not nichos_selecionados:
-        st.warning("Selecione pelo menos um nicho.")
+    if not local_input or not nichos_selecionados:
+        st.warning("Preencha local e nichos.")
     else:
-        with st.spinner("Iniciando motor de busca... Isso pode levar alguns segundos."):
-            # Limpa resultados anteriores
+        with st.spinner("Varrendo o Google Maps..."):
             st.session_state.df_resultados = pd.DataFrame()
-            
             novo_df = run_scraper(local_input, nichos_selecionados, max_res)
             
             if not novo_df.empty:
                 st.session_state.df_resultados = novo_df
-                st.success(f"Busca concluída! {len(novo_df)} empresas encontradas.")
+                st.success(f"Sucesso! {len(novo_df)} empresas encontradas.")
             else:
-                st.warning("Nenhum resultado encontrado. Tente verificar a localização ou os nichos.")
+                st.warning("Nada encontrado.")
 
-# Exibição dos Resultados
+# Exibição
 if not st.session_state.df_resultados.empty:
-    st.divider()
-    st.subheader("📋 Resultados Encontrados")
+    df = st.session_state.df_resultados
     
-    # Editor de dados interativo
-    df_editavel = st.data_editor(
-        st.session_state.df_resultados,
-        num_rows="dynamic",
-        use_container_width=True
+    st.divider()
+    st.subheader("📋 Lista de Leads")
+    
+    # Configuração das Colunas (Transforma texto em Link clicável e esconde lat/lon)
+    st.data_editor(
+        df,
+        column_config={
+            "WhatsApp Link": st.column_config.LinkColumn(
+                "WhatsApp API", 
+                display_text="Abrir Conversa",
+                help="Clique para abrir o WhatsApp Web"
+            ),
+            "Maps Link": st.column_config.LinkColumn(
+                "Google Maps", 
+                display_text="Ver no Maps"
+            ),
+            "latitude": None, # Oculta na tabela
+            "longitude": None # Oculta na tabela
+        },
+        use_container_width=True,
+        hide_index=True
     )
     
-    st.divider()
-    col1, col2 = st.columns(2)
-    
-    # Botão de Download Excel
-    with col1:
+    # Botão de Download
+    col_dl, col_trash = st.columns([3, 1])
+    with col_dl:
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df_editavel.to_excel(writer, index=False, sheet_name='Prospects')
-        processed_data = output.getvalue()
+            # Remove lat/lon do Excel para ficar limpo
+            df_export = df.drop(columns=['latitude', 'longitude'], errors='ignore')
+            df_export.to_excel(writer, index=False, sheet_name='Leads')
         
         st.download_button(
-            label="📥 Baixar Planilha Excel",
-            data=processed_data,
-            file_name=f"prospects_{int(time.time())}.xlsx",
+            label="📥 Baixar Planilha Excel (Com Links)",
+            data=output.getvalue(),
+            file_name=f"leads_{int(time.time())}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
         )
-    
-    # Botão de Limpar
-    with col2:
-        if st.button("🧹 Limpar Resultados"):
+    with col_trash:
+        if st.button("Limpar Tudo"):
             st.session_state.df_resultados = pd.DataFrame()
             st.rerun()
 
+    # --- ÁREA DE DETALHES E MAPA ABAIXO DO DOWNLOAD ---
+    st.divider()
+    st.subheader("📍 Detalhes & Localização Visual")
+    
+    # Seletor de Empresa
+    lista_empresas = df["Empresa"].tolist()
+    empresa_selecionada = st.selectbox("Selecione uma empresa para ver no mapa e contatar:", lista_empresas)
+    
+    if empresa_selecionada:
+        # Filtra os dados da empresa selecionada
+        dados_emp = df[df["Empresa"] == empresa_selecionada].iloc[0]
+        
+        # Área de Botões de Ação Rápida
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.info(f"📞 Tel: {dados_emp['Telefone']}")
+        with c2:
+            if dados_emp["WhatsApp Link"]:
+                st.link_button("💬 Abrir WhatsApp Web", dados_emp["WhatsApp Link"], type="primary", use_container_width=True)
+            else:
+                st.button("Sem WhatsApp", disabled=True, use_container_width=True)
+        with c3:
+            if dados_emp["Maps Link"]:
+                st.link_button("🗺️ Abrir no Google Maps", dados_emp["Maps Link"], use_container_width=True)
+        
+        # Mapa Visual
+        st.markdown(f"**Localização Aproximada:** {dados_emp['Local'] if pd.isna(dados_emp['latitude']) else ''}")
+        
+        # Se tiver latitude e longitude extraídas, mostra o mapa
+        if pd.notna(dados_emp['latitude']) and pd.notna(dados_emp['longitude']):
+            map_data = pd.DataFrame({
+                'lat': [dados_emp['latitude']],
+                'lon': [dados_emp['longitude']]
+            })
+            st.map(map_data, zoom=15)
+        else:
+            st.warning("Coordenadas exatas não puderam ser extraídas para o mapa visual (use o botão 'Abrir no Google Maps').")
+
 else:
     if not btn_buscar:
-        st.info("👈 Configure a busca na barra lateral e clique em Iniciar.")
+        st.info("👈 Configure a busca na esquerda.")
